@@ -5,7 +5,7 @@ pydantic==2.5.0
 pydantic-settings==2.1.0
 python-multipart==0.0.9
 python-dotenv==1.0.0
-rdkit
+rdkit-pypi
 numpy<2
 molscribe
 torch

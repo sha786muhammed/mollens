@@ -1,4 +1,10 @@
-"""Compatibility entry point for MolLens backend."""
+from fastapi import FastAPI
 
-from app.main import app  # re-export for tools expecting backend/main.py
+from app.main import app as _app
 
+app: FastAPI = _app
+
+
+@app.get("/")
+def root():
+    return {"message": "MolLens API running"}

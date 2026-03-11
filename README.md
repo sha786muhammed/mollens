@@ -92,6 +92,22 @@ uvicorn app.main:app --workers 2 --host 0.0.0.0 --port 8000
 - Deploy backend with a process manager/container platform (Docker, Fly.io, Render, Railway, etc.).
 - Configure CORS and reverse proxy for your production domain.
 
+## Deployment
+
+Backend is deployed using Render.
+
+Build command:
+
+```bash
+cd backend && pip install -r requirements.txt
+```
+
+Start command:
+
+```bash
+cd backend && uvicorn main:app --host 0.0.0.0 --port 10000
+```
+
 ## Release
 
 - Current release: **v0.1.0**
