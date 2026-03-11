@@ -178,6 +178,19 @@ function HomePage() {
           <ImageUploader onSuccess={handleImageGenerated} />
         </section>
 
+        <div className="github-section">
+          <p>
+            Open source on GitHub:
+            <a
+              href="https://github.com/sha786muhammed/mollens"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              github.com/sha786muhammed/mollens
+            </a>
+          </p>
+        </div>
+
       </main>
 
       <footer className="footer">

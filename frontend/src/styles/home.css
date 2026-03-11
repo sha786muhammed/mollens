@@ -278,6 +278,24 @@
   border: 1px solid #e2e8f0;
 }
 
+.github-section {
+  margin-top: 60px;
+  text-align: center;
+  font-size: 14px;
+  color: #64748b;
+}
+
+.github-section a {
+  margin-left: 6px;
+  color: #4f6df5;
+  text-decoration: none;
+  font-weight: 500;
+}
+
+.github-section a:hover {
+  text-decoration: underline;
+}
+
 .image-input-section {
   max-width: 900px;
   margin: 60px auto;
