@@ -1,8 +1,8 @@
 fastapi==0.109.0
 starlette==0.35.1
 uvicorn
-pydantic==2.5.0
-pydantic-settings==2.1.0
+pydantic
+pydantic-settings
 python-multipart==0.0.9
 python-dotenv==1.0.0
 rdkit
