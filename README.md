@@ -108,6 +108,11 @@ Start command:
 cd backend && uvicorn main:app --host 0.0.0.0 --port 10000
 ```
 
+Render service settings:
+- Root Directory: *(empty)*
+- Build Command: `cd backend && pip install -r requirements.txt`
+- Start Command: `cd backend && uvicorn main:app --host 0.0.0.0 --port 10000`
+
 ## Release
 
 - Current release: **v0.1.0**
