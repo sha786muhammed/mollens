@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api } from '../api';
-import ImageCropper from './ImageCropper';
 
 function extractPrediction(result) {
   if (!result) return { smiles: '', confidence: null };
@@ -25,8 +24,6 @@ function extractPrediction(result) {
 
 function ImageUploader({ onSuccess, onStructure }) {
   const [file, setFile] = useState(null);
-  const [cropEnabled, setCropEnabled] = useState(false);
-  const [crop, setCrop] = useState(null);
   const [predictedSmiles, setPredictedSmiles] = useState('');
   const [predictionConfidence, setPredictionConfidence] = useState(null);
   const [uploadLoading, setUploadLoading] = useState(false);
@@ -34,7 +31,6 @@ function ImageUploader({ onSuccess, onStructure }) {
   const [error, setError] = useState('');
 
   const uploadInputRef = useRef(null);
-  const cameraInputRef = useRef(null);
 
   const previewUrl = useMemo(() => (file ? URL.createObjectURL(file) : ''), [file]);
 
@@ -50,17 +46,25 @@ function ImageUploader({ onSuccess, onStructure }) {
     setError('');
     setPredictedSmiles('');
     setPredictionConfidence(null);
-    setCrop(null);
   }, []);
 
-  const recognizeImage = useCallback(async (targetFile, cropValue = null) => {
+  const recognizeImage = useCallback(async (targetFile) => {
     if (!targetFile) return;
 
     setUploadLoading(true);
     setError('');
 
     try {
-      const result = await api.uploadImage(targetFile, cropValue);
+      const result = await api.uploadImage(targetFile, null);
+      if (result?.error) {
+        if (String(result.error).toLowerCase().includes('no molecule')) {
+          setError('MolScribe could not detect a molecule in the image.');
+        } else if (String(result.error).toLowerCase().includes('invalid smiles')) {
+          setError('MolScribe detected a structure, but it could not be converted to a valid SMILES.');
+        } else {
+          setError(String(result.error));
+        }
+      }
       const prediction = extractPrediction(result);
 
       setPredictedSmiles(prediction.smiles);
@@ -75,11 +79,11 @@ function ImageUploader({ onSuccess, onStructure }) {
         });
       }
 
-      if (!prediction.smiles) {
-        setError('No predicted SMILES returned from image recognition.');
+      if (!prediction.smiles && !result?.error) {
+        setError('MolScribe could not detect a molecule in the image.');
       }
     } catch (err) {
-      setError(err.message || 'Image upload failed.');
+      setError(err.message || 'Image recognition failed. Please try another image.');
       if (typeof onStructure === 'function') {
         onStructure({
           source: 'image',
@@ -96,45 +100,15 @@ function ImageUploader({ onSuccess, onStructure }) {
     setIncomingFile(selected);
   };
 
-  const onCameraInputChange = (event) => {
-    const captured = event.target.files?.[0] || null;
-    setIncomingFile(captured);
-    if (captured) {
-      recognizeImage(captured, null);
-    }
-  };
-
   const handleDrop = (event) => {
     event.preventDefault();
     const dropped = event.dataTransfer.files?.[0] || null;
     setIncomingFile(dropped);
-    if (dropped) {
-      recognizeImage(dropped, null);
-    }
   };
 
   const handleDragOver = (event) => {
     event.preventDefault();
   };
-
-  useEffect(() => {
-    const handlePaste = (event) => {
-      const items = event.clipboardData?.items || [];
-      for (const item of items) {
-        if (item.type.startsWith('image/')) {
-          const pastedFile = item.getAsFile();
-          if (pastedFile) {
-            setIncomingFile(pastedFile);
-            recognizeImage(pastedFile, null);
-          }
-          break;
-        }
-      }
-    };
-
-    window.addEventListener('paste', handlePaste);
-    return () => window.removeEventListener('paste', handlePaste);
-  }, [recognizeImage, setIncomingFile]);
 
   const submitImage = async (event) => {
     event.preventDefault();
@@ -143,8 +117,7 @@ function ImageUploader({ onSuccess, onStructure }) {
       return;
     }
 
-    const cropPayload = cropEnabled && crop ? crop : null;
-    await recognizeImage(file, cropPayload);
+    await recognizeImage(file);
   };
 
   const generateFromEditedSmiles = async () => {
@@ -187,17 +160,10 @@ function ImageUploader({ onSuccess, onStructure }) {
         onDrop={handleDrop}
         className="rounded-xl border border-dashed border-slate-300 bg-slate-50 p-4 text-sm text-slate-600"
       >
-        Drag and drop a molecule image here, or use upload/camera/paste.
+        Drag and drop a molecule image here, or upload an image file.
       </div>
 
       <div className="flex flex-wrap gap-2">
-        <button
-          type="button"
-          onClick={() => cameraInputRef.current?.click()}
-          className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-700 hover:bg-slate-100"
-        >
-          📷 Camera
-        </button>
         <button
           type="button"
           onClick={() => uploadInputRef.current?.click()}
@@ -214,32 +180,16 @@ function ImageUploader({ onSuccess, onStructure }) {
         onChange={onUploadInputChange}
         className="hidden"
       />
-      <input
-        ref={cameraInputRef}
-        type="file"
-        accept="image/*"
-        capture="environment"
-        onChange={onCameraInputChange}
-        className="hidden"
-      />
 
       {file && (
         <div className="rounded-lg border border-slate-200 bg-white p-3 text-xs text-slate-600">
-          Selected: <span className="font-medium">{file.name || 'clipboard-image.png'}</span>
+          Selected: <span className="font-medium">{file.name || 'molecule-image.png'}</span>
         </div>
       )}
 
       {previewUrl && (
-        <div className="space-y-3">
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              checked={cropEnabled}
-              onChange={(event) => setCropEnabled(event.target.checked)}
-            />
-            Enable Crop Region
-          </label>
-          {cropEnabled && <ImageCropper imageUrl={previewUrl} onCropChange={setCrop} />}
+        <div className="rounded-lg border border-slate-200 bg-white p-2">
+          <img src={previewUrl} alt="Molecule preview" className="max-h-80 w-full object-contain" />
         </div>
       )}
 
@@ -249,7 +199,7 @@ function ImageUploader({ onSuccess, onStructure }) {
           disabled={!file || uploadLoading}
           className="rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
         >
-          {uploadLoading ? 'Processing image...' : 'Generate'}
+          {uploadLoading ? 'Generating...' : 'Generate From Image'}
         </button>
       </form>
 
@@ -273,7 +223,7 @@ function ImageUploader({ onSuccess, onStructure }) {
             disabled={generateLoading || !predictedSmiles.trim()}
             className="rounded-lg bg-indigo-600 px-4 py-2 text-white hover:bg-indigo-700 disabled:cursor-not-allowed disabled:bg-slate-300"
           >
-            {generateLoading ? 'Generating structure...' : 'Generate From Edited SMILES'}
+            {generateLoading ? 'Generating...' : 'Generate From Edited SMILES'}
           </button>
         </div>
       )}

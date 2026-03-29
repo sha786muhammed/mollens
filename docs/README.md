@@ -1,33 +1,23 @@
-# Documentation
+# MolLens Documentation
 
-This directory contains comprehensive documentation for MolLens.
+This directory contains the core project documentation for MolLens.
 
-## Contents
+## Documents
 
-- **API.md** - REST API reference and usage examples
-- **INSTALLATION.md** - Detailed installation instructions
-- **DEVELOPMENT.md** - Developer guide and contribution instructions
-- **ARCHITECTURE.md** - System architecture and design decisions
+- [INSTALLATION.md](INSTALLATION.md): local setup, dependencies, and environment notes
+- [API.md](API.md): backend endpoints, request payloads, and response structure
+- [ARCHITECTURE.md](ARCHITECTURE.md): system design and frontend/backend responsibilities
+- [DEVELOPMENT.md](DEVELOPMENT.md): development workflow, repository notes, and contribution guidance
 
-## Quick Links
+## Recommended Reading Order
 
-- [API Documentation](API.md)
-- [Installation Guide](INSTALLATION.md)
-- [Development Guide](DEVELOPMENT.md)
-- [Architecture Overview](ARCHITECTURE.md)
+1. [INSTALLATION.md](INSTALLATION.md)
+2. [ARCHITECTURE.md](ARCHITECTURE.md)
+3. [API.md](API.md)
+4. [DEVELOPMENT.md](DEVELOPMENT.md)
 
-## Getting Started
+## Runtime Docs
 
-1. Read the [Installation Guide](INSTALLATION.md)
-2. Check [API Documentation](API.md) for available endpoints
-3. See [Development Guide](DEVELOPMENT.md) for contributing
-
-## API Documentation
-
-The interactive API documentation is available at:
-- Swagger UI: http://localhost:8000/docs
-- ReDoc: http://localhost:8000/redoc
-
-## Support
-
-For questions or issues, please visit our [GitHub Issues](https://github.com/yourusername/mollens/issues) page.
+When the backend is running locally:
+- Swagger UI: `http://127.0.0.1:8000/docs`
+- ReDoc: `http://127.0.0.1:8000/redoc`

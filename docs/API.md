@@ -1,73 +1,166 @@
 # API Reference
 
-## Base URL
+Base URL:
 
-`http://localhost:8000`
+```text
+http://127.0.0.1:8000
+```
 
-## Endpoints
+## Health
 
-### Health Check
-
-**GET** `/health`
+### `GET /health`
 
 Response:
 
 ```json
 {
-  "status": "ok",
-  "service": "mollens-backend"
+  "status": "ok"
 }
 ```
 
-### SMILES to 3D Structure
+## Generate 3D from SMILES or Molblock
 
-**POST** `/smiles`
+### `POST /smiles`
 
-Request:
+Request body:
 
 ```json
 {
-  "smiles": "CCO"
+  "smiles": "CC(=O)O",
+  "molblock": "optional molfile text"
 }
 ```
 
-Response:
+At least one of `smiles` or `molblock` must be present.
+
+Typical response fields:
+- `input_smiles`
+- `inchi`
+- `inchikey`
+- `formula`
+- `atom_count`
+- `energy`
+- `conformer_count`
+- `molecular_weight`
+- `logp`
+- `h_bond_donors`
+- `h_bond_acceptors`
+- `topological_polar_surface_area`
+- `molblock`
+- `sdf`
+- `xyz`
+- `atoms`
+- `pipeline`
+
+Example response:
 
 ```json
 {
-  "input_smiles": "CCO",
-  "optimized": true,
-  "atom_count": 3,
+  "input_smiles": "CC(=O)O",
+  "formula": "C2H4O2",
+  "atom_count": 8,
+  "energy": -26.123456,
+  "molblock": "...",
+  "sdf": "...",
+  "xyz": "...",
   "atoms": [
     {
       "id": 1,
       "element": "C",
-      "x": 1.0,
+      "x": 0.0,
       "y": 0.0,
       "z": 0.0
     }
-  ]
+  ],
+  "pipeline": {
+    "input_format_used": "smiles",
+    "molblock_parse_succeeded": false,
+    "smiles_fallback_used": false,
+    "normalization_warning": false,
+    "notes": "Generated from SMILES input"
+  }
 }
 ```
 
-### Upload Molecular Image
+## Upload Image
 
-**POST** `/upload-image`
+### `POST /upload-image`
 
-Request: multipart form-data with a `file` field.
+Request:
+- `multipart/form-data`
+- required field: `file`
+- optional crop fields: `x`, `y`, `width`, `height`
 
-Response:
+Response contains recognized structure information and generated 3D output when successful.
+
+Example fields:
+- `predicted_smiles`
+- `confidence`
+- `input_smiles`
+- `inchi`
+- `inchikey`
+- `molecular_weight`
+- `logp`
+- `atom_count`
+- `atoms`
+
+## Resolve Chemical Name
+
+### `POST /chemical-name`
+
+Request body:
 
 ```json
 {
-  "filename": "molecule.png",
-  "content_type": "image/png",
-  "size_bytes": 12345,
-  "message": "Image accepted. 3D extraction pipeline is placeholder."
+  "name": "caffeine"
 }
 ```
 
-## Docs
+Response contains resolved SMILES and generated 3D structure.
 
-- Swagger UI: `http://localhost:8000/docs`
-- ReDoc: `http://localhost:8000/redoc`
+## Chemical Name Suggestions
+
+### `GET /chemical-name-suggestions?q=<query>&limit=<n>`
+
+Example response:
+
+```json
+{
+  "suggestions": ["caffeine", "caffeic acid"]
+}
+```
+
+## Export Endpoints
+
+Each export endpoint accepts:
+
+```json
+{
+  "atoms": [
+    {
+      "element": "C",
+      "x": 0.0,
+      "y": 0.0,
+      "z": 0.0
+    }
+  ],
+  "charge": 0,
+  "multiplicity": 1
+}
+```
+
+### Available exports
+- `POST /export-gaussian`
+- `POST /export-orca`
+- `POST /export-pdb`
+- `POST /export-sdf`
+- `POST /export-mol`
+
+Each returns a JSON object with an `input` string or an `error` field.
+
+## Rate Limiting
+
+MolLens uses SlowAPI-based request limiting on some endpoints:
+- `/upload-image`: `10/minute`
+- `/smiles`: `60/minute`
+- `/chemical-name`: `30/minute`

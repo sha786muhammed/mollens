@@ -76,25 +76,41 @@ async function request(path, { method = 'GET', headers, body, timeoutMs = 60000 
 }
 
 export const api = {
-  submitSmiles(smiles) {
+  submitSmiles(smiles, molblock = '') {
+    const payload = { smiles };
+    const rawMolblock = String(molblock || '');
+    if (rawMolblock.trim()) {
+      payload.molblock = rawMolblock.replace(/\s+$/, '');
+    }
+
     return request('/smiles', {
       method: 'POST',
       timeoutMs: 60000,
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ smiles })
+      body: JSON.stringify(payload)
     });
   },
 
-  uploadImage(file, crop = null) {
+  searchChemicalName(name) {
+    return request('/chemical-name', {
+      method: 'POST',
+      timeoutMs: 20000,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name })
+    });
+  },
+
+  getChemicalNameSuggestions(query, limit = 8) {
+    const encoded = encodeURIComponent(query || '');
+    return request(`/chemical-name-suggestions?q=${encoded}&limit=${limit}`, {
+      method: 'GET',
+      timeoutMs: 10000
+    });
+  },
+
+  uploadImage(file) {
     const formData = new FormData();
     formData.append('file', file);
-
-    if (crop) {
-      formData.append('x', String(Math.round(crop.x)));
-      formData.append('y', String(Math.round(crop.y)));
-      formData.append('width', String(Math.round(crop.width)));
-      formData.append('height', String(Math.round(crop.height)));
-    }
 
     return request('/upload-image', {
       method: 'POST',
@@ -118,6 +134,33 @@ export const api = {
 
   exportOrca(atoms, charge = 0, multiplicity = 1) {
     return request('/export-orca', {
+      method: 'POST',
+      timeoutMs: 60000,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ atoms, charge, multiplicity })
+    });
+  },
+
+  exportPdb(atoms, charge = 0, multiplicity = 1) {
+    return request('/export-pdb', {
+      method: 'POST',
+      timeoutMs: 60000,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ atoms, charge, multiplicity })
+    });
+  },
+
+  exportSdf(atoms, charge = 0, multiplicity = 1) {
+    return request('/export-sdf', {
+      method: 'POST',
+      timeoutMs: 60000,
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ atoms, charge, multiplicity })
+    });
+  },
+
+  exportMol(atoms, charge = 0, multiplicity = 1) {
+    return request('/export-mol', {
       method: 'POST',
       timeoutMs: 60000,
       headers: { 'Content-Type': 'application/json' },

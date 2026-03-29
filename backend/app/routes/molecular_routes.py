@@ -1,42 +1,33 @@
 """API routes for MolLens backend."""
-from __future__ import annotations
 
 import logging
-import os
-import tempfile
-from pathlib import Path
 from typing import Any
 
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, File, Form, Query, Request, UploadFile
 from fastapi.concurrency import run_in_threadpool
-from pydantic import BaseModel, Field
-from rdkit import Chem
+from slowapi.errors import RateLimitExceeded
 
-from app.services.molscribe_service import image_to_smiles
-from app.services.molecular_service import read_validated_upload
+from app.core.limiter import limiter
+from app.models import ChemicalNameRequest, ExportRequest, SmilesRequest
+from app.services.molecular_service import (
+    error_response,
+    generate_structure_from_chemical_name,
+    process_uploaded_image,
+    read_validated_upload,
+)
 from app.services.qchem_export_service import (
     generate_gaussian_input,
+    generate_mol,
     generate_orca_input,
+    generate_pdb,
+    generate_sdf,
 )
-from app.services.structure_service import generate_3d_from_smiles
-from app.utils.image_utils import crop_image
+from app.services.pubchem_service import suggest_chemical_names
+from app.services.structure_service import generate_3d_from_molblock, generate_3d_from_smiles
+from app.utils.validation import parse_optional_int_form_field, sanitize_text
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
-
-
-class SmilesRequest(BaseModel):
-    """Payload for SMILES input endpoint."""
-
-    smiles: str = Field(..., description="Molecule in SMILES format")
-
-
-class ExportRequest(BaseModel):
-    """Payload for quantum chemistry export endpoints."""
-
-    atoms: list[dict[str, Any]] = Field(..., description="Atom list with element/x/y/z")
-    charge: int = Field(default=0, description="Total molecular charge")
-    multiplicity: int = Field(default=1, description="Spin multiplicity")
 
 
 @router.get("/health")
@@ -46,7 +37,9 @@ def health() -> dict[str, str]:
 
 
 @router.post("/upload-image")
+@limiter.limit("10/minute")
 async def upload_image(
+    request: Request,
     file: UploadFile = File(...),
     x: str | None = Form(None),
     y: str | None = Form(None),
@@ -54,48 +47,77 @@ async def upload_image(
     height: str | None = Form(None),
 ) -> dict[str, Any]:
     """Upload image, run MolScribe recognition, and generate an RDKit 3D structure."""
+    del request
     content, filename, content_type = await read_validated_upload(file)
-    suffix = Path(filename).suffix or _suffix_from_content_type(content_type)
-
-    temp_file_path = ""
 
     try:
-        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as temp_file:
-            temp_file.write(content)
-            temp_file_path = temp_file.name
-
         try:
-            x_val = _parse_optional_int_form_field(x, "x")
-            y_val = _parse_optional_int_form_field(y, "y")
-            width_val = _parse_optional_int_form_field(width, "width")
-            height_val = _parse_optional_int_form_field(height, "height")
+            x_val = parse_optional_int_form_field(x, "x")
+            y_val = parse_optional_int_form_field(y, "y")
+            width_val = parse_optional_int_form_field(width, "width")
+            height_val = parse_optional_int_form_field(height, "height")
         except ValueError as exc:
-            return {"error": str(exc)}
+            return error_response(str(exc))
 
-        result = await run_in_threadpool(
-            _process_upload_pipeline_sync,
-            temp_file_path,
-            x_val,
-            y_val,
-            width_val,
-            height_val,
+        return await run_in_threadpool(
+            process_uploaded_image,
+            content,
+            filename,
+            content_type,
+            x=x_val,
+            y=y_val,
+            width=width_val,
+            height=height_val,
         )
-        return result
+    except RateLimitExceeded:
+        raise
     except Exception as exc:
         logger.exception("Image processing pipeline failed")
-        return {
-            "error": "Image processing failed",
-            "details": str(exc),
-        }
-    finally:
-        if temp_file_path and os.path.exists(temp_file_path):
-            os.unlink(temp_file_path)
+        return error_response("Image processing failed", str(exc))
 
 
 @router.post("/smiles")
-async def smiles(payload: SmilesRequest) -> dict[str, Any]:
+@limiter.limit("60/minute")
+async def smiles(request: Request, payload: SmilesRequest) -> dict[str, Any]:
     """Convert SMILES input into an optimized 3D structure."""
-    return await run_in_threadpool(generate_3d_from_smiles, payload.smiles)
+    del request
+    if payload.molblock:
+        result = await run_in_threadpool(generate_3d_from_molblock, payload.molblock, payload.smiles or "")
+    else:
+        result = await run_in_threadpool(generate_3d_from_smiles, payload.smiles or "")
+
+    if isinstance(result, dict) and "error" in result and "pipeline" not in result:
+        result["pipeline"] = {
+            "input_format_used": "molblock" if payload.molblock else "smiles",
+            "molblock_parse_succeeded": False if payload.molblock else None,
+            "smiles_fallback_used": bool(payload.molblock and payload.smiles),
+            "normalization_warning": False,
+            "notes": "Generation failed before structure optimization"
+        }
+    return result
+
+
+@router.post("/chemical-name")
+@limiter.limit("30/minute")
+async def chemical_name_search(request: Request, payload: ChemicalNameRequest) -> dict[str, Any]:
+    """Resolve chemical name via PubChem and generate optimized 3D structure."""
+    del request
+    return await run_in_threadpool(generate_structure_from_chemical_name, payload.name)
+
+
+@router.get("/chemical-name-suggestions")
+async def chemical_name_suggestions(
+    q: str = Query("", min_length=0, description="Partial chemical name"),
+    limit: int = Query(8, ge=1, le=20),
+) -> dict[str, list[str]]:
+    """Get PubChem autocomplete suggestions for chemical names."""
+    try:
+        sanitized_query = sanitize_text(q, max_length=200, field_name="chemical name query")
+    except ValueError:
+        return {"suggestions": []}
+
+    suggestions = await run_in_threadpool(suggest_chemical_names, sanitized_query, limit)
+    return {"suggestions": suggestions}
 
 
 @router.post("/export-gaussian")
@@ -110,7 +132,7 @@ async def export_gaussian(payload: ExportRequest) -> dict[str, str]:
         )
         return {"input": gaussian_input}
     except ValueError as exc:
-        return {"error": str(exc), "input": ""}
+        return {"error": str(exc), "details": None, "input": ""}
 
 
 @router.post("/export-orca")
@@ -125,103 +147,34 @@ async def export_orca(payload: ExportRequest) -> dict[str, str]:
         )
         return {"input": orca_input}
     except ValueError as exc:
-        return {"error": str(exc), "input": ""}
+        return {"error": str(exc), "details": None, "input": ""}
 
 
-def _process_upload_pipeline_sync(
-    temp_file_path: str,
-    x_val: int | None,
-    y_val: int | None,
-    width_val: int | None,
-    height_val: int | None,
-) -> dict[str, Any]:
-    """Synchronous image pipeline executed in a threadpool."""
-    crop_path: str | None = None
-    target_image_path = temp_file_path
-
+@router.post("/export-pdb")
+async def export_pdb(payload: ExportRequest) -> dict[str, str]:
+    """Export atom coordinates to PDB format."""
     try:
-        crop_params = [x_val, y_val, width_val, height_val]
-        has_any_crop_param = any(value is not None for value in crop_params)
-        if has_any_crop_param:
-            if not all(value is not None for value in crop_params):
-                return {
-                    "error": "Crop parameters x, y, width, and height must all be provided"
-                }
-
-            try:
-                crop_path = crop_image(
-                    temp_file_path,
-                    x_val,
-                    y_val,
-                    width_val,
-                    height_val,
-                )
-                target_image_path = crop_path
-            except ValueError as exc:
-                logger.warning("Crop failed for upload-image: %s", exc)
-                return {"error": str(exc)}
-
-        return _run_single_molecule_pipeline(target_image_path)
-    finally:
-        if crop_path and os.path.exists(crop_path):
-            os.unlink(crop_path)
-
-
-def _run_single_molecule_pipeline(image_path: str) -> dict[str, Any]:
-    """Run MolScribe, SMILES validation, and RDKit 3D generation for one image."""
-    recognition_result = image_to_smiles(image_path)
-    if "error" in recognition_result:
-        return {"error": recognition_result.get("error") or "No molecule detected in image"}
-    if "predicted_smiles" not in recognition_result:
-        return {"error": "No molecule detected in image"}
-
-    predicted_smiles = recognition_result["predicted_smiles"]
-    mol = Chem.MolFromSmiles(predicted_smiles)
-    if mol is None:
-        logger.warning(
-            "Invalid MolScribe SMILES prediction from upload-image: %s",
-            predicted_smiles,
-        )
-        return {
-            "error": "OCSR predicted invalid SMILES",
-            "predicted_smiles": predicted_smiles,
-        }
-
-    structure_result = generate_3d_from_smiles(predicted_smiles)
-    if "error" in structure_result:
-        return {
-            "predicted_smiles": predicted_smiles,
-            "confidence": recognition_result.get("confidence", 0.0),
-            **structure_result,
-        }
-
-    return {
-        "predicted_smiles": predicted_smiles,
-        "confidence": recognition_result.get("confidence", 0.0),
-        "energy": structure_result.get("energy"),
-        "atom_count": structure_result["atom_count"],
-        "atoms": structure_result["atoms"],
-        "conformer_count": structure_result.get("conformer_count"),
-    }
-
-
-def _suffix_from_content_type(content_type: str) -> str:
-    mapping = {
-        "image/png": ".png",
-        "image/jpeg": ".jpg",
-        "image/jpg": ".jpg",
-        "image/webp": ".webp",
-        "image/gif": ".gif",
-    }
-    return mapping.get(content_type, ".img")
-
-
-def _parse_optional_int_form_field(value: str | None, field_name: str) -> int | None:
-    """Normalize multipart form fields where empty strings should be treated as None."""
-    if value is None or value == "":
-        return None
-
-    try:
-        return int(value)
+        pdb_text = await run_in_threadpool(generate_pdb, payload.atoms)
+        return {"input": pdb_text}
     except ValueError as exc:
-        raise ValueError(f"Invalid integer value for {field_name}") from exc
+        return {"error": str(exc), "details": None, "input": ""}
+
+
+@router.post("/export-sdf")
+async def export_sdf(payload: ExportRequest) -> dict[str, str]:
+    """Export atom coordinates to SDF format."""
+    try:
+        sdf_text = await run_in_threadpool(generate_sdf, payload.atoms)
+        return {"input": sdf_text}
+    except ValueError as exc:
+        return {"error": str(exc), "details": None, "input": ""}
+
+
+@router.post("/export-mol")
+async def export_mol(payload: ExportRequest) -> dict[str, str]:
+    """Export atom coordinates to MOL format."""
+    try:
+        mol_text = await run_in_threadpool(generate_mol, payload.atoms)
+        return {"input": mol_text}
+    except ValueError as exc:
+        return {"error": str(exc), "details": None, "input": ""}

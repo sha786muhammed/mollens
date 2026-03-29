@@ -26,11 +26,19 @@ function SmilesInput({ onSuccess, onStructure, presetSmiles }) {
 
     try {
       const result = await api.submitSmiles(cleaned);
+      if (result?.error) {
+        if (result.error === 'Invalid SMILES string') {
+          setError('SMILES not recognized. Please check and try again.');
+        } else {
+          setError('RDKit could not generate a 3D structure for this SMILES.');
+        }
+        return;
+      }
       const payload = { source: 'smiles', result, predictedSmiles: cleaned };
       if (typeof onSuccess === 'function') onSuccess(payload);
       if (typeof onStructure === 'function') onStructure(payload);
     } catch (err) {
-      setError(err.message || 'Failed to generate molecule from SMILES.');
+      setError(err.message || 'Failed to generate structure from SMILES.');
       if (typeof onStructure === 'function') {
         onStructure({ source: 'smiles', result: err.body ?? { error: err.message || 'Request failed' } });
       }

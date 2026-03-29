@@ -4,12 +4,15 @@
   "private": true,
   "dependencies": {
     "3dmol": "^2.5.4",
+    "ketcher-react": "^3.5.0",
+    "ketcher-standalone": "^3.5.0",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
     "react-router-dom": "^6.30.1",
     "react-scripts": "5.0.1"
   },
   "scripts": {
+    "postinstall": "node scripts/patch-ketcher-sourcemaps.js",
     "start": "react-scripts start",
     "build": "react-scripts build",
     "test": "react-scripts test",

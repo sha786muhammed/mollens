@@ -78,3 +78,44 @@ def generate_orca_input(
     ]
 
     return "\n".join(parts)
+
+
+def generate_pdb(atoms: list[dict[str, Any]]) -> str:
+    """Generate a simple PDB text using atom coordinates."""
+    normalized = _normalize_atoms(atoms)
+    lines = []
+    for idx, atom in enumerate(normalized, start=1):
+        lines.append(
+            "HETATM"
+            f"{idx:5d} "
+            f"{str(atom['element'])[:2]:>2}  MOL A   1    "
+            f"{atom['x']:8.3f}{atom['y']:8.3f}{atom['z']:8.3f}"
+            "  1.00  0.00           "
+            f"{str(atom['element'])[:2]:>2}"
+        )
+    lines.append("END")
+    return "\n".join(lines) + "\n"
+
+
+def generate_sdf(atoms: list[dict[str, Any]]) -> str:
+    """Generate a minimal SDF (V2000) text without bond records."""
+    normalized = _normalize_atoms(atoms)
+    lines = [
+        "MolLens",
+        "  MolLens 3D Export",
+        "",
+        f"{len(normalized):>3}{0:>3}  0  0  0  0            999 V2000",
+    ]
+    for atom in normalized:
+        lines.append(
+            f"{atom['x']:>10.4f}{atom['y']:>10.4f}{atom['z']:>10.4f} "
+            f"{str(atom['element'])[:3]:<3} 0  0  0  0  0  0  0  0  0  0  0  0"
+        )
+    lines.extend(["M  END", "$$$$"])
+    return "\n".join(lines) + "\n"
+
+
+def generate_mol(atoms: list[dict[str, Any]]) -> str:
+    """Generate a minimal MOL (V2000) text without bond records."""
+    sdf_text = generate_sdf(atoms)
+    return "\n".join(sdf_text.splitlines()[:-1]) + "\n"

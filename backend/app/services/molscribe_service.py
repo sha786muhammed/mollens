@@ -5,7 +5,6 @@ import logging
 from typing import Any
 
 from molscribe import MolScribe
-from PIL import Image
 from huggingface_hub import hf_hub_download
 
 logger = logging.getLogger(__name__)
@@ -29,8 +28,6 @@ def get_model() -> Any:
 def image_to_smiles(image_path: str) -> dict[str, Any]:
     try:
         model = get_model()
-        with Image.open(image_path) as opened_image:
-            _img = opened_image.convert("RGB")
         result = model.predict_image_file(image_path)
 
         logger.warning("MolScribe raw result: %s", result)

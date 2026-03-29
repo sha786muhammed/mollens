@@ -3,45 +3,120 @@ from __future__ import annotations
 
 from typing import Any
 
-from rdkit import Chem
-from rdkit.Chem import AllChem
-
 
 INVALID_SMILES_RESPONSE = {"error": "Invalid SMILES string"}
+MAX_SMILES_LENGTH = 1000
+MAX_MOLBLOCK_LENGTH = 200000
 
 
 def generate_3d_from_smiles(smiles: str) -> dict[str, Any]:
     """Generate an optimized 3D molecular structure from a SMILES string."""
-    normalized = smiles.strip()
+    normalized = canonicalize_smiles(smiles)
     if not normalized:
         return INVALID_SMILES_RESPONSE
+
+    from rdkit import Chem
 
     molecule = Chem.MolFromSmiles(normalized)
     if molecule is None:
         return INVALID_SMILES_RESPONSE
 
-    molecule_with_h = Chem.AddHs(molecule)
+    result = _generate_3d_from_molecule(molecule, normalized)
+    if "error" in result:
+        return result
+    result["pipeline"] = {
+        "input_format_used": "smiles",
+        "molblock_parse_succeeded": False,
+        "smiles_fallback_used": False,
+        "normalization_warning": normalized != (smiles or "").strip(),
+        "notes": "Generated from SMILES input"
+    }
+    return result
 
-    conf_ids = _embed_conformers_with_fallback(molecule_with_h)
-    if not conf_ids:
+
+def generate_3d_from_molblock(molblock: str, fallback_smiles: str = "") -> dict[str, Any]:
+    """Generate 3D structure from a sketcher molblock, with SMILES fallback when needed."""
+    raw_molblock = molblock or ""
+    if not raw_molblock.strip() or len(raw_molblock) > MAX_MOLBLOCK_LENGTH:
+        fallback_result = generate_3d_from_smiles(fallback_smiles)
+        if "error" not in fallback_result:
+            fallback_result["pipeline"] = {
+                "input_format_used": "smiles",
+                "molblock_parse_succeeded": False,
+                "smiles_fallback_used": True,
+                "normalization_warning": fallback_result.get("pipeline", {}).get("normalization_warning", False),
+                "notes": "Molblock unavailable or oversized; used SMILES fallback"
+            }
+        return fallback_result
+
+    # Keep leading header lines intact; only normalize trailing whitespace/newlines.
+    prepared_molblock = raw_molblock.rstrip()
+
+    from rdkit import Chem
+
+    try:
+        molecule = Chem.MolFromMolBlock(prepared_molblock, sanitize=True, removeHs=False, strictParsing=False)
+    except Exception:
+        molecule = None
+
+    if molecule is None:
+        fallback_result = generate_3d_from_smiles(fallback_smiles)
+        if "error" not in fallback_result:
+            fallback_result["pipeline"] = {
+                "input_format_used": "smiles",
+                "molblock_parse_succeeded": False,
+                "smiles_fallback_used": True,
+                "normalization_warning": fallback_result.get("pipeline", {}).get("normalization_warning", False),
+                "notes": "Molblock parse failed; used SMILES fallback"
+            }
+        return fallback_result
+
+    try:
+        canonical_smiles = Chem.MolToSmiles(Chem.RemoveHs(molecule))
+    except Exception:
+        canonical_smiles = canonicalize_smiles(fallback_smiles) or ""
+
+    result = _generate_3d_from_molecule(molecule, canonical_smiles)
+    if "error" in result:
+        return result
+    result["pipeline"] = {
+        "input_format_used": "molblock",
+        "molblock_parse_succeeded": True,
+        "smiles_fallback_used": False,
+        "normalization_warning": bool(fallback_smiles and canonical_smiles and canonical_smiles != fallback_smiles.strip()),
+        "notes": "Generated from molblock input"
+    }
+    return result
+
+
+def _generate_3d_from_molecule(molecule: Chem.Mol, input_smiles: str) -> dict[str, Any]:
+    from rdkit import Chem
+    from rdkit.Chem import AllChem
+    from rdkit.Chem import Crippen, Descriptors, Lipinski, rdMolDescriptors
+
+    base_molecule = Chem.RemoveHs(molecule)
+    if base_molecule is None:
+        return INVALID_SMILES_RESPONSE
+
+    molecule_with_h = Chem.AddHs(base_molecule)
+
+    conf_id = _embed_conformer(molecule_with_h)
+    if conf_id is None:
         return {"error": "Failed to generate 3D conformer"}
 
-    mmff_props = AllChem.MMFFGetMoleculeProperties(
-        molecule_with_h,
-        mmffVariant="MMFF94",
-    )
-    if mmff_props is None:
-        return {"error": "MMFF94 parameters unavailable for molecule"}
+    mmff_props = AllChem.MMFFGetMoleculeProperties(molecule_with_h, mmffVariant="MMFF94")
+    energy = None
+    if mmff_props is not None:
+        force_field = AllChem.MMFFGetMoleculeForceField(
+            molecule_with_h,
+            mmff_props,
+            confId=conf_id,
+        )
+        if force_field is not None:
+            force_field.Minimize()
+            energy = float(force_field.CalcEnergy())
 
-    best_conf_id, lowest_energy = _optimize_and_rank_conformers(
-        molecule_with_h,
-        mmff_props,
-        conf_ids,
-    )
-    if best_conf_id is None or lowest_energy is None:
-        return {"error": "MMFF94 optimization failed"}
-
-    conformer = molecule_with_h.GetConformer(best_conf_id)
+    conformer = molecule_with_h.GetConformer(conf_id)
     atoms: list[dict[str, Any]] = []
 
     for atom in molecule_with_h.GetAtoms():
@@ -57,67 +132,49 @@ def generate_3d_from_smiles(smiles: str) -> dict[str, Any]:
             }
         )
 
+    inchi, inchikey = _compute_identifiers(base_molecule)
+    resolved_smiles = input_smiles or Chem.MolToSmiles(base_molecule)
+    viewer_molecule = Chem.Mol(molecule_with_h)
+    try:
+        Chem.Kekulize(viewer_molecule, clearAromaticFlags=True)
+    except Exception:
+        viewer_molecule = Chem.Mol(molecule_with_h)
+
+    molblock_3d = Chem.MolToMolBlock(viewer_molecule, confId=conf_id)
+    sdf_3d = f"{molblock_3d}\n$$$$\n"
+    xyz_3d = mol_to_xyz(molecule_with_h)
+
     return {
-        "input_smiles": normalized,
+        "input_smiles": resolved_smiles,
+        "inchi": inchi,
+        "inchikey": inchikey,
+        "formula": rdMolDescriptors.CalcMolFormula(base_molecule),
         "atom_count": len(atoms),
-        "energy": round(lowest_energy, 6),
-        "conformer_count": len(conf_ids),
+        "energy": round(energy, 6) if energy is not None else None,
+        "conformer_count": 1,
+        "molecular_weight": round(float(Descriptors.MolWt(base_molecule)), 6),
+        "logp": round(float(Crippen.MolLogP(base_molecule)), 6),
+        "h_bond_donors": int(Lipinski.NumHDonors(base_molecule)),
+        "h_bond_acceptors": int(Lipinski.NumHAcceptors(base_molecule)),
+        "topological_polar_surface_area": round(float(rdMolDescriptors.CalcTPSA(base_molecule)), 6),
+        "molblock": molblock_3d,
+        "sdf": sdf_3d,
+        "xyz": xyz_3d,
         "atoms": atoms,
     }
 
 
-def _embed_conformers_with_fallback(molecule: Chem.Mol) -> list[int]:
-    """Embed multiple conformers and fall back to single-conformer embedding."""
+def _embed_conformer(molecule: Chem.Mol) -> int | None:
+    """Embed a single ETKDGv3 conformer."""
+    from rdkit.Chem import AllChem
+
     embed_params = AllChem.ETKDGv3()
-    embed_params.randomSeed = 0xF00D
-
+    embed_params.randomSeed = 42
     try:
-        conf_ids = list(AllChem.EmbedMultipleConfs(molecule, numConfs=5, params=embed_params))
+        conf_id = AllChem.EmbedMolecule(molecule, embed_params)
     except Exception:
-        conf_ids = []
-
-    if conf_ids:
-        return [int(conf_id) for conf_id in conf_ids]
-
-    single_status = AllChem.EmbedMolecule(molecule, embed_params)
-    if single_status < 0:
-        return []
-
-    return [int(single_status)]
-
-
-def _optimize_and_rank_conformers(
-    molecule: Chem.Mol,
-    mmff_props: Any,
-    conf_ids: list[int],
-) -> tuple[int | None, float | None]:
-    """Run MMFF optimization and return the lowest-energy conformer ID and energy."""
-    best_conf_id: int | None = None
-    lowest_energy: float | None = None
-
-    for conf_id in conf_ids:
-        optimize_status = AllChem.MMFFOptimizeMolecule(
-            molecule,
-            mmffVariant="MMFF94",
-            confId=conf_id,
-        )
-        if optimize_status == -1:
-            continue
-
-        force_field = AllChem.MMFFGetMoleculeForceField(
-            molecule,
-            mmff_props,
-            confId=conf_id,
-        )
-        if force_field is None:
-            continue
-
-        energy = float(force_field.CalcEnergy())
-        if lowest_energy is None or energy < lowest_energy:
-            lowest_energy = energy
-            best_conf_id = conf_id
-
-    return best_conf_id, lowest_energy
+        return None
+    return int(conf_id) if conf_id >= 0 else None
 
 
 def mol_to_xyz(mol: Chem.Mol) -> str:
@@ -135,3 +192,34 @@ def mol_to_xyz(mol: Chem.Mol) -> str:
         )
 
     return "\n".join(lines)
+
+
+def _compute_identifiers(molecule: Chem.Mol) -> tuple[str, str]:
+    """Best-effort InChI/InChIKey generation."""
+    from rdkit import Chem
+
+    try:
+        inchi = Chem.MolToInchi(molecule)
+        inchikey = Chem.MolToInchiKey(molecule) if inchi else ""
+        return inchi or "", inchikey or ""
+    except Exception:
+        return "", ""
+
+
+def canonicalize_smiles(smiles: str) -> str | None:
+    """Validate and canonicalize a SMILES string."""
+    normalized = (smiles or "").strip()
+    if not normalized or len(normalized) > MAX_SMILES_LENGTH:
+        return None
+    if any(ord(char) < 32 or ord(char) == 127 for char in normalized):
+        return None
+
+    try:
+        from rdkit import Chem
+
+        molecule = Chem.MolFromSmiles(normalized)
+        if molecule is None:
+            return None
+        return Chem.MolToSmiles(molecule)
+    except Exception:
+        return None
